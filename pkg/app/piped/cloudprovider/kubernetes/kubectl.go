@@ -64,6 +64,37 @@ func (c *Kubectl) Apply(ctx context.Context, namespace string, manifest Manifest
 	return nil
 }
 
+func (c *Kubectl) Get(ctx context.Context, kind, name, namespace string) (manifest *Manifest, err error) {
+	defer func() {
+		metricsKubectlCalled(c.version, "get", err == nil)
+	}()
+
+	args := make([]string, 0, 6)
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+	args = append(args, "get", kind, name, "-o", "yaml")
+
+	cmd := exec.CommandContext(ctx, c.execPath, args...)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get: %s (%v)", string(out), err)
+	}
+
+	manifests, err := ParseManifests(string(out))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest (%v)", err)
+	}
+
+	if len(manifests) != 1 {
+		return nil, fmt.Errorf("unexpected manifest result, expected 1 resource but got %d", len(manifests))
+	}
+
+	manifest = &manifests[0]
+	return
+}
+
 func (c *Kubectl) Delete(ctx context.Context, namespace string, r ResourceKey) (err error) {
 	defer func() {
 		metricsKubectlCalled(c.version, "delete", err == nil)

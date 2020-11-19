@@ -73,13 +73,35 @@ func (e *deployExecutor) ensureTrafficRouting(ctx context.Context) model.StageSt
 	e.saveTrafficRoutingMetadata(ctx, primaryPercent, canaryPercent, baselinePercent)
 
 	// Find traffic routing manifests.
-	trafficRoutingManifests, err := findTrafficRoutingManifests(manifests, e.deployCfg.Service.Name, e.deployCfg.TrafficRouting)
-	if err != nil {
-		e.LogPersister.Errorf("Failed while finding traffic routing manifest: (%v)", err)
+	var trafficManifests []provider.Manifest
+	routingMethod := config.DetermineKubernetesTrafficRoutingMethod(e.deployCfg.TrafficRouting)
+
+	switch routingMethod {
+	case config.KubernetesTrafficRoutingMethodPodSelector:
+		trafficManifests = findManifests(provider.KindService, e.deployCfg.Service.Name, manifests)
+		trafficManifests, err = getResources(ctx, e.provider, trafficManifests, e.deployCfg.Input.Namespace)
+		if err != nil {
+			e.LogPersister.Errorf("Failed to retrieve running Service resource (%v)", err)
+			return model.StageStatus_STAGE_FAILURE
+		}
+
+	case config.KubernetesTrafficRoutingMethodIstio:
+		istioCfg := e.deployCfg.TrafficRouting.Istio
+		if istioCfg == nil {
+			istioCfg = &config.IstioTrafficRouting{}
+		}
+		trafficManifests, err = findIstioVirtualServiceManifests(manifests, istioCfg.VirtualService)
+		if err != nil {
+			e.LogPersister.Errorf("Failed while finding traffic routing manifest: (%v)", err)
+			return model.StageStatus_STAGE_FAILURE
+		}
+
+	default:
+		e.LogPersister.Errorf("Traffic routing method %v is not supported", routingMethod)
 		return model.StageStatus_STAGE_FAILURE
 	}
 
-	switch len(trafficRoutingManifests) {
+	switch len(trafficManifests) {
 	case 1:
 		break
 	case 0:
@@ -88,26 +110,26 @@ func (e *deployExecutor) ensureTrafficRouting(ctx context.Context) model.StageSt
 	default:
 		e.LogPersister.Infof(
 			"Detected %d traffic routing manifests but only the first one (%s) will be used",
-			len(trafficRoutingManifests),
-			trafficRoutingManifests[0].Key.ReadableString(),
+			len(trafficManifests),
+			trafficManifests[0].Key.ReadableString(),
 		)
 	}
-	trafficRoutingManifest := trafficRoutingManifests[0]
+	trafficManifest := trafficManifests[0]
 
 	// In case we are routing by PodSelector, the service manifest must contain variantLabel inside its selector.
 	if method == config.KubernetesTrafficRoutingMethodPodSelector {
-		if err := checkVariantSelectorInService(trafficRoutingManifest, primaryVariant); err != nil {
+		if err := checkVariantSelectorInService(trafficManifest, primaryVariant); err != nil {
 			e.LogPersister.Errorf("Traffic routing by PodSelector requires %q inside the selector of Service manifest but it was unable to check that field in manifest %s (%v)",
 				variantLabel+": "+primaryVariant,
-				trafficRoutingManifest.Key.ReadableString(),
+				trafficManifest.Key.ReadableString(),
 				err,
 			)
 			return model.StageStatus_STAGE_FAILURE
 		}
 	}
 
-	trafficRoutingManifest, err = e.generateTrafficRoutingManifest(
-		trafficRoutingManifest,
+	trafficManifest, err = e.generateTrafficRoutingManifest(
+		trafficManifest,
 		primaryPercent,
 		canaryPercent,
 		baselinePercent,
@@ -120,7 +142,7 @@ func (e *deployExecutor) ensureTrafficRouting(ctx context.Context) model.StageSt
 
 	// Add builtin annotations for tracking application live state.
 	addBuiltinAnnontations(
-		[]provider.Manifest{trafficRoutingManifest},
+		[]provider.Manifest{trafficManifest},
 		primaryVariant,
 		commitHash,
 		e.PipedConfig.PipedID,
@@ -132,26 +154,12 @@ func (e *deployExecutor) ensureTrafficRouting(ctx context.Context) model.StageSt
 		canaryPercent,
 		baselinePercent,
 	)
-	if err := applyManifests(ctx, e.provider, []provider.Manifest{trafficRoutingManifest}, e.deployCfg.Input.Namespace, e.LogPersister); err != nil {
+	if err := applyManifests(ctx, e.provider, []provider.Manifest{trafficManifest}, e.deployCfg.Input.Namespace, e.LogPersister); err != nil {
 		return model.StageStatus_STAGE_FAILURE
 	}
 
 	e.LogPersister.Success("Successfully updated traffic routing")
 	return model.StageStatus_STAGE_SUCCESS
-}
-
-func findTrafficRoutingManifests(manifests []provider.Manifest, serviceName string, cfg *config.KubernetesTrafficRouting) ([]provider.Manifest, error) {
-	method := config.DetermineKubernetesTrafficRoutingMethod(cfg)
-
-	if method == config.KubernetesTrafficRoutingMethodIstio {
-		istioConfig := cfg.Istio
-		if istioConfig == nil {
-			istioConfig = &config.IstioTrafficRouting{}
-		}
-		return findIstioVirtualServiceManifests(manifests, istioConfig.VirtualService)
-	}
-
-	return findManifests(provider.KindService, serviceName, manifests), nil
 }
 
 func (e *deployExecutor) generateTrafficRoutingManifest(manifest provider.Manifest, primaryPercent, canaryPercent, baselinePercent int, cfg *config.KubernetesTrafficRouting) (provider.Manifest, error) {

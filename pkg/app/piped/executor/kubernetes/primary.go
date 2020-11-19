@@ -51,13 +51,20 @@ func (e *deployExecutor) ensurePrimaryRollout(ctx context.Context) model.StageSt
 	}
 	e.LogPersister.Successf("Successfully loaded %d manifests", len(manifests))
 
-	routingMethod := config.DetermineKubernetesTrafficRoutingMethod(e.deployCfg.TrafficRouting)
 	var primaryManifests []provider.Manifest
-	if routingMethod == config.KubernetesTrafficRoutingMethodPodSelector {
+	routingMethod := config.DetermineKubernetesTrafficRoutingMethod(e.deployCfg.TrafficRouting)
+
+	switch routingMethod {
+	case config.KubernetesTrafficRoutingMethodPodSelector:
 		primaryManifests = manifests
-	} else {
+
+	case config.KubernetesTrafficRoutingMethodIstio:
 		// Find traffic routing manifests and filter out it from primary manifests.
-		trafficRoutingManifests, err := findTrafficRoutingManifests(manifests, e.deployCfg.Service.Name, e.deployCfg.TrafficRouting)
+		istioCfg := e.deployCfg.TrafficRouting.Istio
+		if istioCfg == nil {
+			istioCfg = &config.IstioTrafficRouting{}
+		}
+		trafficRoutingManifests, err := findIstioVirtualServiceManifests(manifests, istioCfg.VirtualService)
 		if err != nil {
 			e.LogPersister.Errorf("Failed while finding traffic routing manifest: (%v)", err)
 			return model.StageStatus_STAGE_FAILURE
@@ -71,6 +78,10 @@ func (e *deployExecutor) ensurePrimaryRollout(ctx context.Context) model.StageSt
 				primaryManifests = append(primaryManifests, m)
 			}
 		}
+
+	default:
+		e.LogPersister.Errorf("Traffic routing method %v is not supported", routingMethod)
+		return model.StageStatus_STAGE_FAILURE
 	}
 
 	// Check if the variant selector is in the workloads.

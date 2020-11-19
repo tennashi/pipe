@@ -251,6 +251,23 @@ func deleteResources(ctx context.Context, applier provider.Applier, resources []
 	return nil
 }
 
+func getResources(ctx context.Context, getter provider.Getter, manifests []provider.Manifest, namespace string) ([]provider.Manifest, error) {
+	runnings := make([]provider.Manifest, 0, len(manifests))
+	for _, m := range manifests {
+		ns := namespace
+		if m.Key.Namespace != "" && m.Key.Namespace != provider.DefaultNamespace {
+			ns = m.Key.Namespace
+		}
+		rm, err := getter.Get(ctx, m.Key.Kind, m.Key.Name, ns)
+		if err != nil {
+			return nil, fmt.Errorf("unable to load resource %v from namespace %s (%w)", m.Key, ns, err)
+		}
+		runnings = append(runnings, *rm)
+	}
+
+	return runnings, nil
+}
+
 func findManifests(kind, name string, manifests []provider.Manifest) []provider.Manifest {
 	var out []provider.Manifest
 	for _, m := range manifests {
@@ -321,7 +338,7 @@ func generateVariantServiceManifests(services []provider.Manifest, variant, name
 	manifests := make([]provider.Manifest, 0, len(services))
 	updateService := func(s *corev1.Service) {
 		s.Name = makeSuffixedName(s.Name, nameSuffix)
-		// Currently, we suppose that all generated services should be ClusterIP.
+		// Currently, we suppose that all generated services should ve ClusterIP.
 		s.Spec.Type = corev1.ServiceTypeClusterIP
 		// Append the variant label to the selector
 		// to ensure that the generated service is using only workloads of this variant.

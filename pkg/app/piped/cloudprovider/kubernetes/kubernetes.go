@@ -57,6 +57,7 @@ const (
 
 type Provider interface {
 	ManifestLoader
+	Getter
 	Applier
 }
 
@@ -66,12 +67,15 @@ type ManifestLoader interface {
 }
 
 type Applier interface {
-	// Apply does applying application manifests by using the tool specified in Input.
-	Apply(ctx context.Context) error
 	// ApplyManifest does applying the given manifest.
 	ApplyManifest(ctx context.Context, manifest Manifest) error
 	// Delete deletes the given resource from Kubernetes cluster.
 	Delete(ctx context.Context, key ResourceKey) error
+}
+
+type Getter interface {
+	// Retrieve a running resource in the cluster.
+	Get(ctx context.Context, kind, name, namespace string) (*Manifest, error)
 }
 
 type gitClient interface {
@@ -222,9 +226,14 @@ func (p *provider) LoadManifests(ctx context.Context) (manifests []Manifest, err
 	return
 }
 
-// Apply does applying application manifests by using the tool specified in Input.
-func (p *provider) Apply(ctx context.Context) error {
-	return nil
+// Retrieve a running resource in the cluster.
+func (p *provider) Get(ctx context.Context, kind, name, namespace string) (*Manifest, error) {
+	p.initOnce.Do(func() { p.init(ctx) })
+	if p.initErr != nil {
+		return nil, p.initErr
+	}
+
+	return p.kubectl.Get(ctx, kind, name, namespace)
 }
 
 // ApplyManifest does applying the given manifest.
