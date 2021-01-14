@@ -1,0 +1,40 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "client.mock.go",
+        "mock.go",
+        "registry.mock.go",
+    ],
+    importpath = "github.com/pipe-cd/pipe/pkg/app/piped/cloudprovider/lambda/providertest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/app/piped/cloudprovider/lambda:go_default_library",
+        "//pkg/config:go_default_library",
+        "@com_github_golang_mock//gomock:go_default_library",
+        "@org_uber_go_zap//:go_default_library",
+    ],
+)
+
+load("//bazel:gomock.bzl", "gomock")
+
+gomock(
+    name = "mock_client",
+    out = "client.mock.go",
+    interfaces = [
+        "Client",
+    ],
+    library = "//pkg/app/piped/cloudprovider/lambda:go_default_library",
+    package = "providertest",
+)
+
+gomock(
+    name = "mock_registry",
+    out = "registry.mock.go",
+    interfaces = [
+        "Registry",
+    ],
+    library = "//pkg/app/piped/cloudprovider/lambda:go_default_library",
+    package = "providertest",
+)
